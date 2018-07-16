@@ -29,30 +29,32 @@ class VoicePacket(object):
         
         
 class DataPacket(object):
-    def __init__(self, env, server, t_process):
+    def __init__(self, env, server, t_process, i):
         self.env = env
         self.server = server
         self.t_process = t_process
+        self.i = i
+        
         self.action = env.process(self.service())
         
     def service(self):
-        print ('%d ms: Pacote de dados entrou na fila' % env.now)
+        print ('%d ms: Pacote de dados[%d] entrou na fila' % (env.now, self.i))
         try:
             with self.server.request(priority = 1) as req:
                 yield req
                 # Assim que chega sua vez, começa a ser processado
-                print ('%d ms: Pacote de dados sendo processado. Tempo de serviço = %f' % (env.now, self.t_process))
+                print ('%d ms: Pacote de dados[%d] sendo processado. Tempo de serviço = %f' % (env.now, self.i, self.t_process))
                 yield self.env.process(self.process(self.t_process))
-                print ('%d ms: Pacote de dados partiu' % env.now)
+                print ('%d ms: Pacote de dados[%d] partiu' % (env.now, self.i))
                 
         except simpy.Interrupt as interrupt:
             #by = interrupt.cause.by
             usage = env.now - interrupt.cause.usage_since
             interruption_time = env.now
-            print('%d ms: Um pacote de dados foi interrompido depois de %s ms após o início de seu processamento' % (interruption_time, usage))
+            print('%d ms: Pacote de dados[%d] foi interrompido depois de %s ms após o início de seu processamento' % (interruption_time, self.i, usage))
                 
             # Tenta novamente
-            self.service()
+            packet = DataPacket(self.env, self.server, self.t_process, self.i)
     
         
     def process(self, duration):
@@ -82,7 +84,6 @@ class Voice(object):
             print ('%d ms: %s acordou' % (env.now, self.name))
             
             # Enviando pacotes para a fila
-            print ('%d ms: %s começou a enviar pacotes para a fila' % (env.now, self.name))
             for i in xrange(0, 3):
                 yield self.env.process(self.process(self.packet_rate))
                 print ('%d ms: %s[%d] entrou na fila' % (env.now, self.name, i))
@@ -129,13 +130,15 @@ class Data(object):
         self.action = env.process(self.run())
         
     def run(self):
+        i = 0
         while True:
             t_processo = self.data_packet()/self.twoMB
             
-            packet = DataPacket(self.env, self.server, 120)
+            packet = DataPacket(self.env, self.server, 120, i)
             
             # Um pacote a cada 100 ms
             yield self.env.process(self.process(100))
+            i += 1
 
     # Gera um pacote de dados com tamanho variando entre 64 e 1500 bytes, probabilisticamente
     def data_packet(self):
