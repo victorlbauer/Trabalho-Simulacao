@@ -13,20 +13,51 @@ class VoicePacket(object):
         self.name = name
         self.i = i
         
-        self.action = env.process(self.run())
+        self.action = env.process(self.service())
         
-    def run(self):
-        while True:
-            with self.server.request() as req:
-                yield req
-                print ('%s[%d] sendo processado' % (self.name, self.i))
-                yield self.env.process(self.process(100))
-                print ('%s[%d] partiu. T = %d ms' % (self.name, self.i, env.now))
-            break
+    def service(self):
+        # Entra na fila com prioridade 0 (máxima)
+        with self.server.request(priority = 0) as req:
+            yield req
+            print ('%d ms: %s[%d] sendo processado' % (env.now, self.name, self.i))
+            # Tempo de processamento
+            yield self.env.process(self.process(100))
+            print ('%d ms: %s[%d] partiu' % (env.now, self.name, self.i))
         
     def process(self, duration):
         yield self.env.timeout(duration)
         
+        
+class DataPacket(object):
+    def __init__(self, env, server, t_process):
+        self.env = env
+        self.server = server
+        self.t_process = t_process
+        self.action = env.process(self.service())
+        
+    def service(self):
+        print ('%d ms: Pacote de dados entrou na fila' % env.now)
+        try:
+            with self.server.request(priority = 1) as req:
+                yield req
+                # Assim que chega sua vez, começa a ser processado
+                print ('%d ms: Pacote de dados sendo processado. Tempo de serviço = %f' % (env.now, self.t_process))
+                yield self.env.process(self.process(self.t_process))
+                print ('%d ms: Pacote de dados partiu' % env.now)
+                
+        except simpy.Interrupt as interrupt:
+            #by = interrupt.cause.by
+            usage = env.now - interrupt.cause.usage_since
+            interruption_time = env.now
+            print('%d ms: Um pacote de dados foi interrompido depois de %s ms após o início de seu processamento' % (interruption_time, usage))
+                
+            # Tenta novamente
+            self.service()
+    
+        
+    def process(self, duration):
+        yield self.env.timeout(duration)
+
     
 class Voice(object):
     def __init__(self, env, server, name, prio):
@@ -43,23 +74,23 @@ class Voice(object):
         
     def run(self):
         t = self.silence()
-        print('%s período de silencio inicial: %d ms' % (self.name, t))
+        print('%d ms: %s período de silencio inicial: %d ms' % (env.now, self.name, t))
         yield self.env.process(self.process(t))
         
         while True:
             # Acordando o processo
-            print ('%s acordou. T = %d ms' % (self.name, env.now))
+            print ('%d ms: %s acordou' % (env.now, self.name))
             
             # Enviando pacotes para a fila
-            print ('%s começou a enviar pacotes para a fila. T = %d ms' % (self.name, env.now))
+            print ('%d ms: %s começou a enviar pacotes para a fila' % (env.now, self.name))
             for i in xrange(0, 3):
                 yield self.env.process(self.process(self.packet_rate))
-                print ('%s[%d] entrou na fila. T = %d ms' % (self.name, i, env.now))
+                print ('%d ms: %s[%d] entrou na fila' % (env.now, self.name, i))
                 packet = VoicePacket(self.env, self.server, self.name, i)
                 
-    
+            # Periodo silencioso
             t = self.silence()
-            print ('%s tempo de silencio: %d ms' % (self.name, t))
+            print ('%d ms: %s tempo de silencio: %d ms' % (env.now, self.name, t))
             yield self.env.process(self.process(t))
     
         
@@ -99,25 +130,13 @@ class Data(object):
         
     def run(self):
         while True:
-            try:
-                # Taxa de chegada = 10% de utilização
-                yield env.timeout(100)
-                
-                # Entra na fila (com prioridade)
-                req = self.server.request(priority = self.prio)
-                yield req
-                
-                # Assim que chega sua vez, começa a ser processado
-                t_processo = self.data_packet()/self.twoMB
-                print ('Sendo processado no tempo %d ms. Tempo de serviço = %f' % (env.now, t_processo))
-                yield self.env.process(self.process(t_processo))
-                server.release(req)
-                
-            except simpy.Interrupt as interrupt:
-                by = interrupt.cause.by
-                usage = env.now - interrupt.cause.usage_since
-                print('%s foi interrompido por %s, no tempo %s ms, depois de %s ms' % (self.name, by, env.now, usage))
-    
+            t_processo = self.data_packet()/self.twoMB
+            
+            packet = DataPacket(self.env, self.server, 120)
+            
+            # Um pacote a cada 100 ms
+            yield self.env.process(self.process(100))
+
     # Gera um pacote de dados com tamanho variando entre 64 e 1500 bytes, probabilisticamente
     def data_packet(self):
         prob = random.uniform(0, 1)
@@ -151,9 +170,8 @@ if __name__ == "__main__":
     for i in xrange(0, n_voz):    
         voice = Voice(env, server, 'Voice[%s]' % i, 0)
          
-    #q = Queue(env, server, queue)
     # Inicializa o cliente de dados    
-    #data = Data(env, server, 'Data', 1)
+    data = Data(env, server, 'Data', 1)
     
     # Roda a simulação
     env.run(until=2000)
