@@ -2,40 +2,84 @@
 import math
 import random
 import simpy
+import numpy as np
 
 class StatisticsCollector():
-    def __init__(self):
+    def __init__(self, k, n_rounds):
+        self.k = k
+        self.n_rounds = n_rounds
+        self.num_samples_collected = 0
+        self.current_round = 0
+        
+        self.total_time = 0.0
+        self.total_data_packets = 0.0
+        self.total_data_time = 0.0
+        
         self.data_t = 0.0
         self.data_w = 0.0
         self.data_x = 0.0
-        self.data_nq = 0.0
-        self.total_data_packets = 0.0
+        self.num_data_packets = 0
         
         self.voice_t = 0.0
         self.voice_w = 0.0
-        self.voice_nq = 0.0
-        self.total_voice_packets = 0.0
+        self.num_voice_packets = 0
+        
+        self.data_t_list = []
+        self.data_w_list = []
+        self.data_x_list = []
+        self.data_nq_list = []
+        
+        self.voice_t_list = []
+        self.voice_w_list = []
+        self.voice_nq_list = []
+        
+    def CreateSamples(self, time):
+        self.data_t_list.append(self.data_t/self.num_data_packets)
+        self.data_w_list.append(self.data_w/self.num_data_packets)
+        self.data_x_list.append(self.data_x/self.num_data_packets)
+        self.data_nq_list.append(self.data_w * self.num_data_packets/time)
+        
+        self.voice_t_list.append(self.voice_t/self.num_voice_packets)
+        self.voice_w_list.append(self.voice_w/self.num_voice_packets)
+        self.voice_nq_list.append(self.voice_w * self.num_voice_packets/time)
+        
+        self.total_data_time += self.data_x
+        
+        self.Reset()
     
-    def T_Data(self):
-        return self.data_t/self.total_data_packets
-    
-    def W_Data(self):
-        return self.data_w/self.total_data_packets
-    
-    def X_Data(self):
-        return self.data_x/self.total_data_packets
-    
-    def Nq_Data(self):
-        return self.data_w/10000
-    
-    def T_Voice(self):
-        return self.voice_t/self.total_voice_packets
-    
-    def W_Voice(self):
-        return self.voice_w/self.total_voice_packets
-    
-    def Nq_Voice(self):
-        return self.voice_w/10000
+    def Reset(self):
+        self.data_t = 0.0
+        self.data_w = 0.0
+        self.data_x = 0.0
+        self.num_data_packets = 0
+        
+        self.voice_t = 0.0
+        self.voice_w = 0.0
+        self.num_voice_packets = 0
+        
+    def Results(self):
+        t90_30 = 1.697 # valor para o test T com 30 graus de liberdade 
+        results = [self.data_t_list,
+                   self.data_w_list,
+                   self.data_x_list,
+                   self.data_nq_list,
+                   self.voice_t_list,
+                   self.voice_w_list,
+                   self.voice_nq_list]
+        
+        names = ["T1", "W1", "X1", "Nq1", "T2", "W2", "Nq2"]
+        
+        print ("================================================================================")
+        print ("ms\tLower Bound\t   Mean\t\tUpper Bound\t Variance")
+        for entry, name in zip(results, names):
+            entry.pop(0) # Remove os resultados da fase transiente
+            mean = np.mean(entry)
+            var = np.mean(entry)
+            lower_bound = mean - t90_30*(var/math.sqrt(self.n_rounds - 1))
+            upper_bound = mean + t90_30*(var/math.sqrt(self.n_rounds - 1))
+            
+            print ("%s\t %f\t %f\t %f\t %f" % (name, lower_bound, mean, upper_bound, var))
+
 
 # Cliente de voz
 class Voice(object):
@@ -58,16 +102,37 @@ class Voice(object):
         yield self.env.process(self.process(t))
         
         while True:
+            # Termina depois de N rodadas
+            if(self.collector.current_round == self.collector.n_rounds):
+                print ("%s terminando..." % self.name)
+                break
+            
             # Acordando o processo
             print ('%d ms: %s acordou' % (env.now, self.name))
             
             # Enviando pacotes para a fila
             n_packets = self.voice_packet()
-            self.collector.total_voice_packets += n_packets
+            self.collector.num_voice_packets += n_packets
             for i in xrange(0, n_packets):
                 yield self.env.process(self.process(self.packet_rate))
                 print ('%d ms: %s[%d] entrou na fila' % (env.now, self.name, i))
                 packet = VoicePacket(self.env, self.server, self.name, i, self.collector)
+                
+                # Coleta K amostras por rodada
+                self.collector.num_samples_collected += 1
+                if(self.collector.num_samples_collected >= self.collector.k):
+                    self.collector.CreateSamples(env.now)
+                    self.collector.num_samples_collected = 0
+                    self.collector.current_round += 1   
+                
+                # Termina depois de N rodadas
+                if(self.collector.current_round == self.collector.n_rounds):
+                    break
+            
+            # Termina depois de N rodadas
+            if(self.collector.current_round == self.collector.n_rounds):
+                print ("%s terminando..." % self.name)
+                break
                 
             # Periodo silencioso
             yield self.env.process(self.process(self.packet_rate))
@@ -151,12 +216,13 @@ class Data(object):
         self.id = 0
         
         self.collector = collector
+        self.num_samples = 0
         
         self.action = env.process(self.run())
         
     def run(self):
         self.id = 1        # ID do pacote
-        self.collector.total_data_packets += 1
+        self.collector.num_data_packets += 1
         packet_rate = 100  # Taxa inicial = 1 pacote a cada 100ms
         while True:
             packet_size = self.data_packet()
@@ -169,7 +235,21 @@ class Data(object):
             packet_rate = self.get_rate(packet_rate, env.now, t_process)
             
             self.id += 1
-            self.collector.total_data_packets += 1
+            self.collector.num_data_packets += 1
+            
+            # Coleta K amostras por rodada
+            self.collector.num_samples_collected += 1
+            if(self.collector.num_samples_collected >= self.collector.k):
+                self.collector.CreateSamples(env.now)
+                self.collector.num_samples_collected = 0
+                self.collector.current_round += 1
+                
+            # Termina a simulação depois de N rounds    
+            if(self.collector.current_round == self.collector.n_rounds):
+                print ("Pacote de dados terminando...")
+                self.collector.total_time = env.now
+                self.collector.total_data_packets = self.id
+                break
             
     # Gera um pacote de dados com tamanho variando entre 64 e 1500 bytes, probabilisticamente
     def data_packet(self):
@@ -187,15 +267,12 @@ class Data(object):
         else:
             return self.data_size[2]
     
-    # Ajustar para preemptivo
     # Ajusta a taxa de chegada para os pacotes de dados de modo que ela fique próxima do Rho escolhido    
     def get_rate(self, packet_rate, time_now, time_process):
         err = 0.00005
         correction = 10
         self.total_time += time_process
         tax = self.total_time/time_now
-        
-        print tax, packet_rate
         
         if(tax > self.rho + err):
             return packet_rate + correction
@@ -259,15 +336,16 @@ class DataPacket(object):
     
     def process(self, duration):
         yield self.env.timeout(duration)
-
-
+   
+    
 if __name__ == "__main__":
     random.seed(42) # Semente inicial
     n_voz = 30 # Número de clientes de voz
-    data_rho = 0.5 # Taxa de utilização pelos pacotes de dados
-    
-    k = 1000 # Numero de coletas por rodada (ajustar mais tarde)
-    
+    rho = 0.5 # Taxa de utilização pelos pacotes de dados
+
+    k = 650 # Número de coletas por rodada (achado pelo metodo Média de Batches)
+    n_rounds = 31 # Número de rodadas (1 descartada + 30 para análise)
+
     # Inicializa o sistema
     env = simpy.Environment()
     preemptive = False
@@ -275,28 +353,37 @@ if __name__ == "__main__":
         server = simpy.PreemptiveResource(env, capacity=1)
     else:
         server = simpy.PriorityResource(env, capacity=1)
- 
+         
     # Coletor de estatísticas
-    collector = StatisticsCollector()  
-    
+    collector = StatisticsCollector(k, n_rounds)  
+            
     # Inicializa os clientes de voz
     for i in xrange(0, n_voz):    
         voice = Voice(env, server, 'Voice[%s]' % i, collector)
-  
+          
     # Inicializa o cliente de dados    
-    data = Data(env, server, 'Data', data_rho, collector)
-
+    data = Data(env, server, 'Data', rho, collector)
+        
     # Roda a simulação
-    env.run(until=10000)
+    env.run()
+
+    # Para rho = 0.1, k = 150 
+    # Para rho = 0.2, k = 270
+    # Para rho = 0.3, k = 380
+    # Para rho = 0.4, k = 550
+    # Para rho = 0.5, k = 650
+    # Para rho = 0.6, k = 1000
+    # Para rho = 0.7, k = 1600
+
+    print ("================================================================================")
+    print ("Rho: %.1f" % rho)
+    print ("K: %d" % k)
+    print ("Número de rodadas: %d" % n_rounds)
+    print ("Tempo final da simulação (A): %d ms" % collector.total_time)
+    print ("Tempo total gasto no servidor pelos pacotes de dados(B): %d ms" % collector.total_data_time)
+    print ("Total de pacotes de dados gerados: %d" % collector.total_data_packets)
+    print ("Taxa de utilização do servidor pelos pacotes de dados (A/B): %f" % (collector.total_data_time/collector.total_time))
+
+    collector.Results()
     
-    # Analisa dados coletados
-    print collector.T_Data()
-    print collector.W_Data()
-    print collector.X_Data()
-    print collector.Nq_Data()
-    print
-    print collector.T_Voice()
-    print collector.W_Voice()
-    print collector.Nq_Voice()
-    print collector.data_x/10000
     
