@@ -14,6 +14,7 @@ class StatisticsCollector():
         self.total_time = 0.0
         self.total_data_packets = 0.0
         self.total_data_time = 0.0
+        self.time_before = 0.0
         
         self.data_t = 0.0
         self.data_w = 0.0
@@ -23,6 +24,8 @@ class StatisticsCollector():
         self.voice_t = 0.0
         self.voice_w = 0.0
         self.num_voice_packets = 0
+        
+        self.t = []
         
         self.data_t_list = []
         self.data_w_list = []
@@ -37,13 +40,14 @@ class StatisticsCollector():
         self.data_t_list.append(self.data_t/self.num_data_packets)
         self.data_w_list.append(self.data_w/self.num_data_packets)
         self.data_x_list.append(self.data_x/self.num_data_packets)
-        self.data_nq_list.append(self.data_w * self.num_data_packets/time)
+        self.data_nq_list.append(self.data_w/(time - self.time_before))
         
         self.voice_t_list.append(self.voice_t/self.num_voice_packets)
         self.voice_w_list.append(self.voice_w/self.num_voice_packets)
-        self.voice_nq_list.append(self.voice_w * self.num_voice_packets/time)
+        self.voice_nq_list.append(self.voice_w/(time - self.time_before))
         
         self.total_data_time += self.data_x
+        self.time_before = time
         
         self.Reset()
     
@@ -74,7 +78,7 @@ class StatisticsCollector():
         for entry, name in zip(results, names):
             entry.pop(0) # Remove os resultados da fase transiente
             mean = np.mean(entry)
-            var = np.mean(entry)
+            var = np.var(entry, ddof=1)
             lower_bound = mean - t90_30*(var/math.sqrt(self.n_rounds - 1))
             upper_bound = mean + t90_30*(var/math.sqrt(self.n_rounds - 1))
             
@@ -112,8 +116,8 @@ class Voice(object):
             
             # Enviando pacotes para a fila
             n_packets = self.voice_packet()
-            self.collector.num_voice_packets += n_packets
             for i in xrange(0, n_packets):
+                self.collector.num_voice_packets += 1
                 yield self.env.process(self.process(self.packet_rate))
                 print ('%d ms: %s[%d] entrou na fila' % (env.now, self.name, i))
                 packet = VoicePacket(self.env, self.server, self.name, i, self.collector)
@@ -341,9 +345,9 @@ class DataPacket(object):
 if __name__ == "__main__":
     random.seed(42) # Semente inicial
     n_voz = 30 # Número de clientes de voz
-    rho = 0.5 # Taxa de utilização pelos pacotes de dados
+    rho = 0.6 # Taxa de utilização pelos pacotes de dados
 
-    k = 650 # Número de coletas por rodada (achado pelo metodo Média de Batches)
+    k = 1000 # Número de coletas por rodada (achado pelo metodo Média de Batches)
     n_rounds = 31 # Número de rodadas (1 descartada + 30 para análise)
 
     # Inicializa o sistema
@@ -374,6 +378,8 @@ if __name__ == "__main__":
     # Para rho = 0.5, k = 650
     # Para rho = 0.6, k = 1000
     # Para rho = 0.7, k = 1600
+    
+    print collector.t
 
     print ("================================================================================")
     print ("Rho: %.1f" % rho)
