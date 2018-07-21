@@ -71,7 +71,7 @@ class StatisticsCollector():
         self.delta = [[0, 0.0, 0.0]]*n_voz
         
     def Results(self):
-        t90_30 = 1.645 # valor para o test T com 30 graus de liberdade 
+        t90_30 = 1.697 # valor para o test T com 30 graus de liberdade 
         results = [self.data_t_list,
                    self.data_w_list,
                    self.data_x_list,
@@ -378,9 +378,9 @@ class DataPacket(object):
 if __name__ == "__main__":
     random.seed(42) # Semente inicial
     n_voz = 30 # Número de clientes de voz
-    rho = 0.5 # Taxa de utilização pelos pacotes de dados
+    rho = 0.7 # Taxa de utilização pelos pacotes de dados
 
-    k = 650 # Número de coletas por rodada (achado pelo metodo Média de Batches)
+    k = 1600 # Número de coletas por rodada (achado pelo metodo Média de Batches)
     n_rounds = 31 # Número de rodadas (1 descartada + 30 para análise)
 
     # Inicializa o sistema
