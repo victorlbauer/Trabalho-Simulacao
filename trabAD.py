@@ -5,7 +5,7 @@ import simpy
 import numpy as np
 
 class StatisticsCollector():
-    def __init__(self, k, n_rounds):
+    def __init__(self, k, n_rounds, n_voz):
         self.k = k
         self.n_rounds = n_rounds
         self.num_samples_collected = 0
@@ -23,9 +23,9 @@ class StatisticsCollector():
         
         self.voice_t = 0.0
         self.voice_w = 0.0
+        self.last_departure = 0.0
         self.num_voice_packets = 0
-        
-        self.t = []
+        self.delta = [[0, 0.0, 0.0]]*n_voz
         
         self.data_t_list = []
         self.data_w_list = []
@@ -35,6 +35,8 @@ class StatisticsCollector():
         self.voice_t_list = []
         self.voice_w_list = []
         self.voice_nq_list = []
+        self.delta_list = []
+        self.delta_var_list = []
         
     def CreateSamples(self, time):
         self.data_t_list.append(self.data_t/self.num_data_packets)
@@ -49,6 +51,11 @@ class StatisticsCollector():
         self.total_data_time += self.data_x
         self.time_before = time
         
+        delta, delta_var = self.Jitter()
+        
+        self.delta_list.append(delta)
+        self.delta_var_list.append(delta_var)
+        
         self.Reset()
     
     def Reset(self):
@@ -60,37 +67,51 @@ class StatisticsCollector():
         self.voice_t = 0.0
         self.voice_w = 0.0
         self.num_voice_packets = 0
+    
+        self.delta = [[0, 0.0, 0.0]]*n_voz
         
     def Results(self):
-        t90_30 = 1.697 # valor para o test T com 30 graus de liberdade 
+        t90_30 = 1.645 # valor para o test T com 30 graus de liberdade 
         results = [self.data_t_list,
                    self.data_w_list,
                    self.data_x_list,
                    self.data_nq_list,
                    self.voice_t_list,
                    self.voice_w_list,
-                   self.voice_nq_list]
+                   self.voice_nq_list,
+                   self.delta_list,
+                   self.delta_var_list]
         
-        names = ["T1", "W1", "X1", "Nq1", "T2", "W2", "Nq2"]
+        names = ["T1", "W1", "X1", "Nq1", "T2", "W2", "Nq2", "Delta", "DVar"]
         
         print ("================================================================================")
-        print ("ms\tLower Bound\t   Mean\t\tUpper Bound\t Variance")
+        print ("ms\tLower Bound\t   Mean\t\tUpper Bound")
         for entry, name in zip(results, names):
             entry.pop(0) # Remove os resultados da fase transiente
             mean = np.mean(entry)
             var = np.var(entry, ddof=1)
-            lower_bound = mean - t90_30*(var/math.sqrt(self.n_rounds - 1))
-            upper_bound = mean + t90_30*(var/math.sqrt(self.n_rounds - 1))
+            lower_bound = mean - t90_30*(math.sqrt(var/(self.n_rounds - 1)))
+            upper_bound = mean + t90_30*(math.sqrt(var/(self.n_rounds - 1)))
             
-            print ("%s\t %f\t %f\t %f\t %f" % (name, lower_bound, mean, upper_bound, var))
+            print ("%s\t %f\t %f\t %f" % (name, lower_bound, mean, upper_bound))
 
-
+    def Jitter(self):
+        l = []
+        for entry in self.delta:
+            if (entry[0] != 0):
+                l.append(entry[2]/entry[0])
+            else:
+                l.append(0.0)
+        return np.mean(l), np.var(l, ddof=1) 
+    
+        
 # Cliente de voz
 class Voice(object):
-    def __init__(self, env, server, name, collector):
+    def __init__(self, env, server, name, ID, collector):
         self.env = env
         self.server = server
         self.name = name
+        self.ID = ID
         self.collector = collector
         
         self.mean_silence = 650.0
@@ -120,7 +141,7 @@ class Voice(object):
                 self.collector.num_voice_packets += 1
                 yield self.env.process(self.process(self.packet_rate))
                 print ('%d ms: %s[%d] entrou na fila' % (env.now, self.name, i))
-                packet = VoicePacket(self.env, self.server, self.name, i, self.collector)
+                packet = VoicePacket(self.env, self.server, self.name, i, self.ID, self.collector)
                 
                 # Coleta K amostras por rodada
                 self.collector.num_samples_collected += 1
@@ -164,11 +185,12 @@ class Voice(object):
 
 # Pacote de voz    
 class VoicePacket(object):
-    def __init__(self, env, server, name, i, collector):
+    def __init__(self, env, server, name, i, ID, collector):
         self.env = env
         self.server = server
         self.name = name
         self.i = i
+        self.ID = ID
         self.collector = collector
         
         self.t_arrival = 0.0
@@ -194,6 +216,17 @@ class VoicePacket(object):
             # Coleta estatisticas
             self.t_departure = env.now
             self.collector.voice_t += self.t_departure - self.t_arrival
+            
+            # Jitter
+            # Primeira partida
+            if(self.collector.delta[self.ID][0] == 0):
+                self.collector.delta[self.ID] = [1, self.t_departure, 0.0]
+            else:
+                self.collector.delta[self.ID][0] += 1
+                t = self.t_departure - self.collector.delta[self.ID][1]
+                self.collector.delta[self.ID][1] = self.t_departure
+                self.collector.delta[self.ID][2] += t
+                
             print ('%d ms: %s[%d] partiu' % (env.now, self.name, self.i))
         
     def process(self, duration):
@@ -345,9 +378,9 @@ class DataPacket(object):
 if __name__ == "__main__":
     random.seed(42) # Semente inicial
     n_voz = 30 # Número de clientes de voz
-    rho = 0.6 # Taxa de utilização pelos pacotes de dados
+    rho = 0.5 # Taxa de utilização pelos pacotes de dados
 
-    k = 1000 # Número de coletas por rodada (achado pelo metodo Média de Batches)
+    k = 650 # Número de coletas por rodada (achado pelo metodo Média de Batches)
     n_rounds = 31 # Número de rodadas (1 descartada + 30 para análise)
 
     # Inicializa o sistema
@@ -359,11 +392,11 @@ if __name__ == "__main__":
         server = simpy.PriorityResource(env, capacity=1)
          
     # Coletor de estatísticas
-    collector = StatisticsCollector(k, n_rounds)  
+    collector = StatisticsCollector(k, n_rounds, n_voz)  
             
     # Inicializa os clientes de voz
     for i in xrange(0, n_voz):    
-        voice = Voice(env, server, 'Voice[%s]' % i, collector)
+        voice = Voice(env, server, 'Voice[%s]' % i, i, collector)
           
     # Inicializa o cliente de dados    
     data = Data(env, server, 'Data', rho, collector)
@@ -378,8 +411,6 @@ if __name__ == "__main__":
     # Para rho = 0.5, k = 650
     # Para rho = 0.6, k = 1000
     # Para rho = 0.7, k = 1600
-    
-    print collector.t
 
     print ("================================================================================")
     print ("Rho: %.1f" % rho)
