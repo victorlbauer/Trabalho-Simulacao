@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 import math
 import random
 import simpy
@@ -380,7 +381,7 @@ class DataPacket(object):
 if __name__ == "__main__":
     random.seed(42) # Semente inicial
     n_voz = 30 # Número de clientes de voz
-    rho = 0.6 # Taxa de utilização pelos pacotes de dados
+    rho = 0.1 # Taxa de utilização pelos pacotes de dados
 
     k = 100 # Número de coletas por rodada (achado pelo metodo Média de Batches)
     n_rounds = 31  # Número de rodadas (1 descartada + 30 para análise)
@@ -389,7 +390,7 @@ if __name__ == "__main__":
     y = []
     z = []
     
-    for j in xrange(0, 60):
+    for j in xrange(0, 40):
         # Inicializa o sistema
         env = simpy.Environment()
         preemptive = False
@@ -418,30 +419,17 @@ if __name__ == "__main__":
         random.seed(42)
         print ("Calculando para k = %d, loop %d" % (k, j))
     
-    print z
     
+    
+    fig = plt.figure()
     plt.plot(x, y, 'k')
-    plt.show()
-'''
-    # Para rho = 0.1, k = 150 
-    # Para rho = 0.2, k = 270
-    # Para rho = 0.3, k = 380
-    # Para rho = 0.4, k = 550
-    # Para rho = 0.5, k = 650
-    # Para rho = 0.6, k = 1000
-    # Para rho = 0.7, k = 1600
-
-    print ("================================================================================")
-    print ("Rho: %.1f" % rho)
-    print ("K: %d" % k)
-    print ("Número de rodadas: %d" % n_rounds)
-    print ("Tempo final da simulação (A): %d ms" % collector.total_time)
-    print ("Tempo total gasto no servidor pelos pacotes de dados(B): %d ms" % collector.total_data_time)
-    print ("Total de pacotes de dados gerados: %d" % collector.total_data_packets)
-    print ("Taxa de utilização do servidor pelos pacotes de dados (A/B): %f" % (collector.total_data_time/collector.total_time))
-
-    collector.Results()
-'''
     
+    fig.suptitle('ρ = %d' % rho, fontsize=14)
+    plt.xlabel('Valores de K', fontsize=14)
+    plt.ylabel('Variância de Δ', fontsize=14)
+    figname = "rho%s" % str(rho)
+    fig.savefig(figname + '.jpg')
+
+    plt.show()
     
     
